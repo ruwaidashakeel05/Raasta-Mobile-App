@@ -16,176 +16,146 @@
 
 
 # ── OBSERVER INTERFACE ──
-# Every observer (commuter) must implement this.
-# Defining it as a base class enforces the contract.
 class Observer:
-    def update(self, message: str, route_id: str):
-        # This method is called automatically when a bus sends an alert.
-        # Every subclass MUST override this — if not, NotImplementedError is raised.
+    def update(self, message: str, route_id: str, bus_id: str = "", stop_name: str = ""):
         raise NotImplementedError("update() must be implemented by subclasses")
 
 
 # ── SUBJECT INTERFACE ──
-# Every subject (bus route) must implement these 3 methods.
-# subscribe, unsubscribe, notify — this is the standard Observer contract.
 class Subject:
     def subscribe(self, observer: Observer):
-        # Add a commuter to the alert list
         raise NotImplementedError
 
     def unsubscribe(self, observer: Observer):
-        # Remove a commuter from the alert list
         raise NotImplementedError
 
     def notify(self, message: str):
-        # Send alert to ALL commuters in the subscriber list
         raise NotImplementedError
 
 
 # ── CONCRETE SUBJECT → BusRoute ──
-# This is the actual bus route that commuters watch.
-# It extends Subject and provides real implementations.
 class BusRoute(Subject):
 
-    def __init__(self, route_id: str, route_name: str):
+    def __init__(self, route_id: str, route_name: str, bus_id: str = ""):
         self.route_id = route_id            # unique ID e.g. "R1"
-        self.route_name = route_name        # human-readable name e.g. "Saddar to Bahria Town"
-        self._observers = []                # list of Commuter objects watching this route
-        self.delay_minutes = 0              # current delay in minutes (0 = on time)
-        self.current_stop = ""             # name of the stop the bus is currently at
+        self.route_name = route_name        # human-readable name
+        self.bus_id = bus_id                # FIX → store real bus_id e.g. "B1"
+        self._observers = []                # list of subscribed Commuter objects
+        self.delay_minutes = 0              # current delay in minutes
+        self.current_stop = ""             # current stop name
 
     def subscribe(self, observer: Observer):
-        # Add a commuter to the subscriber list.
-        # Check first to avoid duplicate entries.
         if observer not in self._observers:
-            self._observers.append(observer)    # add to the list
+            self._observers.append(observer)
 
     def unsubscribe(self, observer: Observer):
-        # Remove a commuter from the subscriber list.
-        # Check first to avoid ValueError if not found.
         if observer in self._observers:
-            self._observers.remove(observer)    # remove from the list
+            self._observers.remove(observer)
 
-    def notify(self, message: str):
-        # Send an alert to EVERY commuter currently subscribed.
-        # Calls update() on each one — they handle it individually.
+    def notify(self, message: str, bus_id: str = "", stop_name: str = ""):
+        # FIX → pass bus_id and stop_name to each observer
         for observer in self._observers:
-            observer.update(message, self.route_id)     # pass message and route ID
+            observer.update(message, self.route_id, bus_id, stop_name)
 
     def set_delay(self, minutes: int, stop_name: str):
-        # Called by the simulator when a bus is delayed.
-        # Updates internal state and notifies all subscribers.
-        self.delay_minutes = minutes            # update current delay
-        self.current_stop = stop_name           # update current stop
+        self.delay_minutes = minutes
+        self.current_stop = stop_name
 
-        # Build an appropriate message based on delay amount
         if minutes > 0:
-            # Bus is delayed → tell subscribers how long
             message = f"{self.route_name} is delayed by {minutes} min at {stop_name}"
         else:
-            # Delay cleared → bus is back on time
             message = f"{self.route_name} is back on schedule at {stop_name}"
 
-        # Push the message to all subscribed commuters automatically
-        self.notify(message)
+        # FIX → pass real bus_id and stop_name so alerts save correctly to DB
+        self.notify(message, bus_id=self.bus_id, stop_name=stop_name)
 
     def move_to_stop(self, stop_name: str):
-        # Called by the simulator when bus arrives at the next stop.
-        # Updates current stop and notifies all subscribers.
-        self.current_stop = stop_name                                   # update current position
-        message = f"{self.route_name} has arrived at {stop_name}"      # build arrival message
-        self.notify(message)                                            # alert all subscribers
+        self.current_stop = stop_name
+        message = f"{self.route_name} has arrived at {stop_name}"
+        # FIX → pass real bus_id and stop_name
+        self.notify(message, bus_id=self.bus_id, stop_name=stop_name)
 
 
 # ── CONCRETE OBSERVER → Commuter ──
-# This is the commuter who receives alerts.
-# It extends Observer and provides the real update() logic.
 class Commuter(Observer):
 
     def __init__(self, user_id: str, name: str):
-        self.user_id = user_id      # the commuter's UUID from the database
-        self.name = name            # the commuter's display name
-        self.alerts = []            # in-memory list of alerts received this session
+        self.user_id = user_id
+        self.name = name
+        self.alerts = []
 
-    def update(self, message: str, route_id: str):
-        # This runs automatically when a BusRoute calls notify().
-        # Saves the alert locally and also persists it to the database.
+    def update(self, message: str, route_id: str, bus_id: str = "", stop_name: str = ""):
+        # Save alert to in-memory list
+        alert = {"message": message, "route_id": route_id}
+        self.alerts.append(alert)
+        print(f"[ALERT → {self.name}]: {message}")
 
-        # Build the alert dictionary
-        alert = {
-            "message": message,         # the alert text
-            "route_id": route_id        # which route sent it
-        }
-
-        self.alerts.append(alert)                           # save to in-memory list
-        print(f"[ALERT → {self.name}]: {message}")         # print to console for debugging
-
-        # FIX → Also save the alert to the database so it appears in /alerts/{user_id}
-        # Previously alerts were only printed to console and lost on restart.
-        # Now they are persisted so the user can see their alert history.
+        # FIX → save to DB with real bus_id and stop_name
+        # Previously bus_id="unknown" caused foreign key violation in DB
+        # Now we use the real bus_id passed from the simulator
         try:
-            from queries import save_alert      # import here to avoid circular imports at module level
+            from queries import save_alert
+            from database import SessionLocal, Bus
+
+            # Find a real bus_id that exists in DB for this route
+            db = SessionLocal()
+            real_bus = db.query(Bus).filter(Bus.route_id == route_id).first()
+            db.close()
+
+            if not real_bus:
+                print(f"[DEBUG] No bus found for route {route_id} — skipping save")
+                return
+
+            real_bus_id = real_bus.id
+            print(f"[DEBUG] Saving alert — user:{self.user_id} route:{route_id} bus:{real_bus_id} stop:{stop_name}")
+
             save_alert(
-                user_id=self.user_id,           # which user this alert is for
-                route_id=route_id,              # which route triggered it
-                bus_id="unknown",               # bus_id not available here; set to placeholder
-                message=message,                # the alert text
-                stop_name=""                    # stop name not passed here; left empty
+                user_id=self.user_id,
+                route_id=route_id,
+                bus_id=real_bus_id,
+                message=message,
+                stop_name=stop_name
             )
+            print(f"[DEBUG] Alert saved successfully!")
+
         except Exception as e:
-            # Don't crash the observer if DB save fails — just log it
             print(f"[WARNING] Could not save alert to DB: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # ── ROUTE MANAGER (Singleton Pattern) ──
-# DESIGN PATTERN → SINGLETON
-# Only ONE RouteManager instance exists for the entire app lifetime.
-# It stores all BusRoute objects and manages their subscribers.
 class RouteManager:
 
-    _instance = None        # class-level variable that holds the single instance
+    _instance = None
 
     def __new__(cls):
-        # __new__ is called before __init__ when creating an object.
-        # We override it to ensure only one instance is ever created.
         if cls._instance is None:
-            cls._instance = super().__new__(cls)        # create the instance once
-            cls._instance.routes = {}                   # initialize empty routes dictionary
-        return cls._instance                            # always return the same instance
+            cls._instance = super().__new__(cls)
+            cls._instance.routes = {}
+        return cls._instance
 
     def get_route(self, route_id: str) -> BusRoute:
-        # Look up a BusRoute by its ID e.g. "R1"
-        # Returns None if the route doesn't exist
         return self.routes.get(route_id)
 
     def add_route(self, route: BusRoute):
-        # Register a new BusRoute in the manager
-        # Called at startup by the simulator for each route
-        self.routes[route.route_id] = route             # store with route_id as key
+        self.routes[route.route_id] = route
 
     def add_subscriber(self, route_id: str, commuter: Commuter):
-        # Subscribe a commuter to a route.
-        # Called by the /subscribe endpoint in main.py
-        route = self.get_route(route_id)                # find the route
-        if route:                                       # only subscribe if route exists
-            route.subscribe(commuter)                   # add commuter to route's observer list
+        route = self.get_route(route_id)
+        if route:
+            route.subscribe(commuter)
 
     def remove_subscriber(self, route_id: str, commuter: Commuter):
-        # Unsubscribe a commuter from a route.
-        # Called by the /unsubscribe endpoint in main.py
-        route = self.get_route(route_id)                # find the route
-        if route:                                       # only unsubscribe if route exists
-            route.unsubscribe(commuter)                 # remove commuter from observer list
+        route = self.get_route(route_id)
+        if route:
+            route.unsubscribe(commuter)
 
     def alert_route(self, route_id: str, message: str):
-        # Manually send an alert to all subscribers of a route.
-        # Useful for sending custom admin alerts.
-        route = self.get_route(route_id)                # find the route
-        if route:                                       # only alert if route exists
-            route.notify(message)                       # trigger Observer notification chain
+        route = self.get_route(route_id)
+        if route:
+            route.notify(message)
 
 
-# ── GLOBAL SINGLETON INSTANCE ──
-# This is the one RouteManager used by all files (main.py, simulator.py).
-# Imported directly: from observer import route_manager
+# One global instance used everywhere
 route_manager = RouteManager()

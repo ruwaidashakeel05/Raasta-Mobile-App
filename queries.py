@@ -15,7 +15,7 @@
 
 from database import (
     SessionLocal, User, Route, Bus, Stop,       # import all ORM models
-    BusPosition, Subscription, Schedule, AlertHistory
+    BusPosition, Subscription, Schedule, AlertHistory, NotificationPreference
 )
 from sqlalchemy import and_, func               # and_ for multi-condition filters, func for MAX()
 
@@ -210,6 +210,22 @@ def get_user_subscriptions(user_id):
         db.close()      # FIX → always close session
 
 
+# ── CHECK IF USER IS SUBSCRIBED TO A SPECIFIC ROUTE ──
+def is_user_subscribed_to_route(user_id, route_id):
+    db = SessionLocal()             # open a new database session
+    try:
+        # Check if an active subscription exists for this user and route
+        sub = db.query(Subscription).filter(
+            Subscription.user_id == user_id,        # match this user
+            Subscription.route_id == route_id,      # match this route
+            Subscription.is_active == True          # only active subscriptions
+        ).first()
+        
+        return sub is not None      # return True if subscription exists, False otherwise
+    finally:
+        db.close()      # always close session
+
+
 # ── GET ALL SUBSCRIBERS FOR A ROUTE ──
 def get_subscribers_for_route(route_id):
     db = SessionLocal()             # open a new database session
@@ -265,3 +281,74 @@ def get_user_alerts(user_id):
         ).order_by(AlertHistory.sent_at.desc()).limit(50).all()  # newest first, max 50
     finally:
         db.close()      # FIX → always close session
+
+
+# ── UPDATE USER PROFILE (name, email, password_hash) ──
+def update_user_profile(user_id, name=None, email=None, password_hash=None):
+    db = SessionLocal()             # open a new database session
+    try:
+        # Find the user by ID
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:                # if user not found
+            return None             # return None (endpoint will handle 404)
+        
+        # Update only the fields that were provided (not None)
+        if name is not None:
+            user.name = name                # update name
+        if email is not None:
+            user.email = email              # update email
+        if password_hash is not None:
+            user.password_hash = password_hash  # update password hash
+        
+        db.commit()                 # save changes to database
+        return user                 # return the updated user object
+    finally:
+        db.close()      # always close session
+
+
+# ── GET NOTIFICATION PREFERENCES FOR A USER ──
+def get_notification_preferences(user_id):
+    db = SessionLocal()             # open a new database session
+    try:
+        # Look for existing notification preferences for this user
+        prefs = db.query(NotificationPreference).filter(
+            NotificationPreference.user_id == user_id   # match this user
+        ).first()
+        
+        if not prefs:
+            # If no preferences exist, create default ones
+            prefs = NotificationPreference(user_id=user_id)
+            db.add(prefs)
+            db.commit()
+            db.refresh(prefs)
+        
+        return prefs                # return the preferences (existing or newly created)
+    finally:
+        db.close()      # always close session
+
+
+# ── UPDATE/SAVE NOTIFICATION PREFERENCES FOR A USER ──
+def update_notification_preferences(user_id, **kwargs):
+    db = SessionLocal()             # open a new database session
+    try:
+        # Look for existing preferences, or create new ones
+        prefs = db.query(NotificationPreference).filter(
+            NotificationPreference.user_id == user_id
+        ).first()
+        
+        if not prefs:
+            # Create new preferences if none exist
+            prefs = NotificationPreference(user_id=user_id)
+        
+        # Update each preference field that was provided
+        for key, value in kwargs.items():
+            if hasattr(prefs, key):         # check if the field exists on the model
+                setattr(prefs, key, value)  # set the attribute to the new value
+        
+        db.add(prefs)               # stage the changes
+        db.commit()                 # save to database
+        db.refresh(prefs)           # reload to get all current values
+        return prefs                # return the updated preferences
+    finally:
+        db.close()      # always close session

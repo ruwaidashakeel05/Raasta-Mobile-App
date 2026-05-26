@@ -91,6 +91,7 @@ class User(Base):
     # Relationships → lets us do user.subscriptions or user.alerts
     subscriptions = relationship("Subscription", back_populates="user")         # all subscriptions by this user
     alerts = relationship("AlertHistory", back_populates="user")                # all alerts received by this user
+    notification_preferences = relationship("NotificationPreference", back_populates="user")  # notification settings
 
 
 class Route(Base):
@@ -195,3 +196,22 @@ class AlertHistory(Base):
 
     # Relationship
     user = relationship("User", back_populates="alerts")                        # the user who received this alert
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"                                  # maps to "notification_preferences" table
+
+    id = Column(Integer, primary_key=True, autoincrement=True)                  # auto-incrementing ID
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)    # which user these preferences belong to
+    email_on_delay = Column(Boolean, default=True)                              # send email when bus is delayed
+    sms_on_delay = Column(Boolean, default=False)                               # send SMS when bus is delayed
+    push_on_delay = Column(Boolean, default=True)                               # send push notification when delayed
+    email_on_arrival = Column(Boolean, default=True)                            # send email when bus arrives at stop
+    sms_on_arrival = Column(Boolean, default=False)                             # send SMS when bus arrives
+    push_on_arrival = Column(Boolean, default=False)                            # send push notification on arrival
+    quiet_hours_start = Column(Time)                                            # don't send alerts after this time (e.g. 10 PM)
+    quiet_hours_end = Column(Time)                                              # don't send alerts before this time (e.g. 6 AM)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # when settings were last updated
+
+    # Relationship
+    user = relationship("User", back_populates="notification_preferences")      # the user who has these preferences
